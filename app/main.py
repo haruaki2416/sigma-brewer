@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import os
-import re
 import shutil
-import socket
 import tempfile
 import threading
 import time
@@ -14,9 +10,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from yt_dlp import YoutubeDL
 
 ROOT = Path(__file__).resolve().parent
@@ -24,7 +22,6 @@ DOWNLOAD_ROOT = Path(tempfile.gettempdir()) / "sigma-brewer"
 DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Sigma Brewer", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
-
 jobs: dict[str, dict] = {}
 lock = threading.Lock()
 active_job: str | None = None
@@ -39,10 +36,8 @@ def validate_youtube_url(raw: str) -> str:
     parsed = urlparse(raw.strip())
     host = (parsed.hostname or "").lower().rstrip(".")
     allowed = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
-    if parsed.scheme not in {"http", "https"} or host not in allowed:
+    if parsed.scheme not in {"http", "https"} or host not in allowed or parsed.username or parsed.password:
         raise HTTPException(400, "Please enter a valid YouTube video URL.")
-    if parsed.username or parsed.password:
-        raise HTTPException(400, "Invalid URL.")
     return raw.strip()
 
 
@@ -52,17 +47,16 @@ def progress_hook(job_id: str):
             job = jobs.get(job_id)
             if not job:
                 return
-            status = data.get("status")
-            if status == "downloading":
+            if data.get("status") == "downloading":
                 total = data.get("total_bytes") or data.get("total_bytes_estimate")
                 downloaded = data.get("downloaded_bytes", 0)
                 job["progress"] = round(min(99.0, downloaded * 100 / total), 1) if total else None
                 job["downloaded"] = downloaded
                 job["total"] = total
-                job["speed"] = data.get(" speed") or data.get("speed")
+                job["speed"] = data.get("speed")
                 job["eta"] = data.get("eta")
                 job["phase"] = "Downloading"
-            elif status == "finished":
+            elif data.get("status") == "finished":
                 job["progress"] = 99.0
                 job["phase"] = "Processing video and audio"
     return hook
@@ -123,8 +117,7 @@ async def start_download(payload: DownloadRequest, request: Request):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     with lock:
-        previous = last_request_by_ip.get(client_ip, 0)
-        if now - previous < 10:
+        if now - last_request_by_ip.get(client_ip, 0) < 10:
             raise HTTPException(429, "Please wait a few seconds before starting another download.")
         if active_job is not None:
             raise HTTPException(429, "The downloader is busy with another video. Try again shortly.")
@@ -157,7 +150,7 @@ def get_file(job_id: str):
         shutil.rmtree(path.parent, ignore_errors=True)
         with lock:
             jobs.pop(job_id, None)
-    return FileResponse(path, filename=filename, media_type="application/octet-stream", background=__import__("starlette").background.BackgroundTask(cleanup))
+    return FileResponse(path, filename=filename, media_type="application/octet-stream", background=BackgroundTask(cleanup))
 
 @app.on_event("startup")
 def clean_old_jobs():
