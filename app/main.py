@@ -67,7 +67,7 @@ def run_download(job_id: str, url: str, quality: int):
     folder = DOWNLOAD_ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
     opts = {
-        "format": f"best[ext=mp4][height<={quality}]/best[height<={quality}]/best",
+        "format": f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best",
         "outtmpl": str(folder / "%(title).180B [%(id)s].%(ext)s"),
         "merge_output_format": "mp4",
         "noplaylist": True,
