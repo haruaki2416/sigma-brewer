@@ -80,6 +80,8 @@ def run_download(job_id: str, url: str, quality: int):
         "continuedl": True,
         "overwrites": True,
         "socket_timeout": 30,
+        # Enable yt-dlp's supported JavaScript challenge solver for YouTube extraction.
+        "js_runtimes": {"deno": {}},
         "restrictfilenames": True,
         "max_filesize": 12 * 1024 * 1024 * 1024,
     }
@@ -94,9 +96,19 @@ def run_download(job_id: str, url: str, quality: int):
             jobs[job_id].update({"status": "ready", "phase": "Ready", "progress": 100, "file": str(output), "filename": output.name, "title": info.get("title", output.stem)})
     except Exception as exc:
         shutil.rmtree(folder, ignore_errors=True)
+        raw_error = str(exc)
+        if "Sign in to confirm" in raw_error or "not a bot" in raw_error.lower():
+            user_error = (
+                "YouTube is requiring an authenticated session for requests from this server. "
+                "This is a YouTube-side access check, not a video-quality or file-size problem. "
+                "The server-side JavaScript runtime is enabled; if this continues, this hosting IP "
+                "may not be allowed to access the video. No account cookies are stored by Sigma Brewer."
+            )
+        else:
+            user_error = raw_error[:500]
         with lock:
             if job_id in jobs:
-                jobs[job_id].update({"status": "error", "phase": "Failed", "error": str(exc)[:500]})
+                jobs[job_id].update({"status": "error", "phase": "Failed", "error": user_error})
     finally:
         with lock:
             active_job = None
